@@ -4,11 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"github.com/influxdata/flux"
-	"github.com/influxdata/flux/ast"
-	"github.com/influxdata/flux/execute"
-	"github.com/influxdata/flux/lang"
-	"github.com/influxdata/flux/stdlib"
 	"io"
 	"io/ioutil"
 	nethttp "net/http"
@@ -16,6 +11,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/influxdata/flux"
+	"github.com/influxdata/flux/ast"
+	"github.com/influxdata/flux/execute"
+	"github.com/influxdata/flux/lang"
+	"github.com/influxdata/flux/parser"
+	"github.com/influxdata/flux/stdlib"
 
 	platform "github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/bolt"
@@ -132,6 +134,25 @@ func benchEndToEnd(b *testing.B, pkgs []*ast.Package) {
 	}
 }
 
+var optionsSource = `
+import "testing"
+import c "csv"
+
+option testing.loadStorage = (csv) => {
+	c.from(csv: csv) |> to(bucket: bucket, org: org)
+	return from(bucket: bucket)
+}
+`
+var optionsAST *ast.File
+
+func init() {
+	pkg := parser.ParseSource(optionsSource)
+	if ast.Check(pkg) > 0 {
+		panic(ast.GetError(pkg))
+	}
+	optionAST = pkg.Files[0]
+}
+
 func testFlux(t testing.TB, l *Launcher, pkg *ast.Package) {
 
 	// Query server to ensure write persists.
@@ -147,131 +168,23 @@ func testFlux(t testing.TB, l *Launcher, pkg *ast.Package) {
 		t.Fatal(err)
 	}
 
-	// generated to match this:
-	// (csv) => {c.from(csv: csv) |> to(bucket: %s, org: %s) return from(bucket: %[1]s) }", b.Name, b.Organization)
-	myFnExpr := &ast.OptionStatement{
+	options := optionsAST.Copy().(*ast.File)
+	bucketopt := &ast.OptionStatement{
 		Assignment: &ast.VariableAssignment{
-			BaseNode: ast.BaseNode{
-				Errors: nil,
-				Loc: &ast.SourceLocation{
-					End: ast.Position{
-						Column: 47,
-						Line:   9,
-					},
-					File:   "testing.flux",
-					Source: "loadStorage = (csv) => c.from(csv: csv)",
-					Start: ast.Position{
-						Column: 8,
-						Line:   9,
-					},
-				},
-			},
-			ID: &ast.Identifier{
-				BaseNode: ast.BaseNode{
-					Errors: nil,
-					Loc: &ast.SourceLocation{
-						End: ast.Position{
-							Column: 19,
-							Line:   9,
-						},
-						File:   "testing.flux",
-						Source: "loadStorage",
-						Start: ast.Position{
-							Column: 8,
-							Line:   9,
-						},
-					},
-				},
-				Name: "loadStorage",
-			},
-			Init: &ast.FunctionExpression{
-				Body: &ast.Block{
-					Body: []ast.Statement{&ast.ExpressionStatement{
-						Expression: &ast.PipeExpression{
-							Argument: &ast.CallExpression{
-								Arguments: []ast.Expression{&ast.ObjectExpression{
-									Properties: []*ast.Property{
-										&ast.Property{
-											Key: &ast.Identifier{
-												Name: "csv",
-											},
-											Value: &ast.Identifier{
-												Name: "csv",
-											},
-										}},
-								}},
-								Callee: &ast.MemberExpression{
-									Object: &ast.Identifier{
-										Name: "c",
-									},
-									Property: &ast.Identifier{
-										Name: "from",
-									},
-								},
-							},
-							Call: &ast.CallExpression{
-								Arguments: []ast.Expression{&ast.ObjectExpression{
-									Properties: []*ast.Property{
-										&ast.Property{
-											Key: &ast.Identifier{
-												Name: "bucket",
-											},
-											Value: &ast.StringLiteral{
-												Value: b.Name,
-											},
-										}, &ast.Property{
-											Key: &ast.Identifier{
-												Name: "org",
-											},
-											Value: &ast.StringLiteral{
-												Value: b.Organization,
-											},
-										},
-									},
-								}},
-								Callee: &ast.Identifier{
-									Name: "to",
-								},
-							},
-						},
-					}, &ast.ReturnStatement{
-						Argument: &ast.CallExpression{
-							Arguments: []ast.Expression{&ast.ObjectExpression{
-								Properties: []*ast.Property{
-									&ast.Property{
-										Key: &ast.Identifier{
-											Name: "bucket",
-										},
-										Value: &ast.StringLiteral{
-											Value: b.Name,
-										},
-									},
-								},
-							}},
-							Callee: &ast.Identifier{
-								Name: "from",
-							},
-						},
-					}},
-				},
-				Params: []*ast.Property{&ast.Property{
-					Key: &ast.Identifier{
-						Name: "csv",
-					},
-					Value: nil,
-				}},
-			}}}
+			ID:   &ast.Identifier{Name: "bucket"},
+			Init: &ast.StringLiteral{Value: b.Name},
+		},
+	}
+	orgOpt := &ast.OptionStatement{
+		Assignment: &ast.VariableAssignment{
+			ID:   &ast.Identifier{Name: "org"},
+			Init: &ast.StringLiteral{Value: b.Organization},
+		},
+	}
+	options.Body = append([]ast.Statement{bucketOpt, orgOpt}, options.Body...)
 
-	pkg.Files[0].Body = append([]ast.Statement{myFnExpr}, pkg.Files[0].Body...)
-	pkg.Files[0].Imports = append(pkg.Files[0].Imports,
-		&ast.ImportDeclaration{
-			As: &ast.Identifier{
-				Name: "c",
-			},
-			Path: &ast.StringLiteral{
-				Value: "csv",
-			},
-		})
+	pkg.Files = append(pkg.Files, options)
+
 	req := &query.Request{
 		OrganizationID: l.Org.ID,
 		Compiler:       lang.ASTCompiler{AST: pkg},
