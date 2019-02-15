@@ -1,7 +1,6 @@
 package testing_test
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"io"
@@ -138,6 +137,8 @@ var optionsSource = `
 import "testing"
 import c "csv"
 
+// Options bucket and org are defined dynamically per test
+
 option testing.loadStorage = (csv) => {
 	c.from(csv: csv) |> to(bucket: bucket, org: org)
 	return from(bucket: bucket)
@@ -150,7 +151,7 @@ func init() {
 	if ast.Check(pkg) > 0 {
 		panic(ast.GetError(pkg))
 	}
-	optionAST = pkg.Files[0]
+	optionsAST = pkg.Files[0]
 }
 
 func testFlux(t testing.TB, l *Launcher, pkg *ast.Package) {
@@ -168,8 +169,8 @@ func testFlux(t testing.TB, l *Launcher, pkg *ast.Package) {
 		t.Fatal(err)
 	}
 
-	options := optionsAST.Copy().(*ast.File)
-	bucketopt := &ast.OptionStatement{
+	// Define bucket and org options
+	bucketOpt := &ast.OptionStatement{
 		Assignment: &ast.VariableAssignment{
 			ID:   &ast.Identifier{Name: "bucket"},
 			Init: &ast.StringLiteral{Value: b.Name},
@@ -181,16 +182,29 @@ func testFlux(t testing.TB, l *Launcher, pkg *ast.Package) {
 			Init: &ast.StringLiteral{Value: b.Organization},
 		},
 	}
+	options := optionsAST.Copy().(*ast.File)
 	options.Body = append([]ast.Statement{bucketOpt, orgOpt}, options.Body...)
 
+	// Add options to pkg
 	pkg.Files = append(pkg.Files, options)
+
+	// Add testing.run calls
+	runCalls := stdlib.TestingRunCalls(pkg)
+	pkg.Files = append(pkg.Files, runCalls)
 
 	req := &query.Request{
 		OrganizationID: l.Org.ID,
 		Compiler:       lang.ASTCompiler{AST: pkg},
 	}
-	if _, err := l.FluxService().Query(ctx, req); err != nil {
+	if r, err := l.FluxService().Query(ctx, req); err != nil {
 		t.Fatal(err)
+	} else {
+		for r.More() {
+			r.Next()
+		}
+		if err := r.Err(); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// quirk: our execution engine doesn't guarantee the order of execution for disconnected DAGS
@@ -201,31 +215,37 @@ func testFlux(t testing.TB, l *Launcher, pkg *ast.Package) {
 		t.Fatal(err)
 	}
 
-	var out bytes.Buffer
-	defer func() {
-		if t.Failed() {
-			scanner := bufio.NewScanner(&out)
-			for scanner.Scan() {
-				t.Log(scanner.Text())
-			}
-		}
-	}()
-
 	for r.More() {
 		v := r.Next()
-		err := v.Tables().Do(func(tbl flux.Table) error {
-			_, _ = execute.NewFormatter(tbl, nil).WriteTo(&out)
+		if err := v.Tables().Do(func(tbl flux.Table) error {
 			return nil
-		})
-		if err != nil {
+		}); err != nil {
 			t.Error(err)
 		}
 	}
 	if err := r.Err(); err != nil {
 		t.Error(err)
-		// TODO(adam): here, we should modify the statement testing.run(call) to testing.inspect(call) and run again to get the diff
+		// Replace the testing.run calls with testing.inspect calls.
+		inspectCalls := stdlib.TestingInspectCalls(pkg)
+		pkg.Files[len(pkg.Files)-1] = inspectCalls
+		r, err := l.FluxService().Query(ctx, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		for r.More() {
+			v := r.Next()
+			var out bytes.Buffer
+			err := execute.FormatResult(&out, v)
+			if err != nil {
+				t.Error(err)
+			}
+		}
+		if err := r.Err(); err != nil {
+			t.Error(err)
+		}
+		t.Log(out.String())
 	}
-
 }
 
 // Launcher is a test wrapper for main.Launcher.
