@@ -406,7 +406,7 @@ func parsePointsAppend(points []Point, buf []byte, mm []byte, defaultTime time.T
 
 	// measurement name is required
 	if len(key) == 0 {
-		return points, fmt.Errorf("missing measurement")
+		return points, errMissingMeasurement
 	}
 
 	if len(key) > MaxKeyLength {
@@ -432,7 +432,7 @@ func parsePointsAppend(points []Point, buf []byte, mm []byte, defaultTime time.T
 	if err != nil {
 		return points, err
 	} else if len(fields) == 0 {
-		return points, fmt.Errorf("missing fields")
+		return points, errMissingFields
 	}
 
 	// scan the last block which is an optional integer timestamp
@@ -634,6 +634,11 @@ const (
 	fieldsState
 )
 
+var (
+	errMissingMeasurement = errors.New("missing measurement")
+	errMissingFields      = errors.New("missing fields")
+)
+
 // scanMeasurement examines the measurement part of a Point, returning
 // the next state to move to, and the current location in the buffer.
 func scanMeasurement(buf []byte, i int) (int, int, error) {
@@ -641,14 +646,14 @@ func scanMeasurement(buf []byte, i int) (int, int, error) {
 	// It can't be a space, since whitespace is stripped prior to this
 	// function call.
 	if i >= len(buf) || buf[i] == ',' {
-		return -1, i, fmt.Errorf("missing measurement")
+		return -1, i, errMissingMeasurement
 	}
 
 	for {
 		i++
 		if i >= len(buf) {
 			// cpu
-			return -1, i, fmt.Errorf("missing fields")
+			return -1, i, errMissingFields
 		}
 
 		if buf[i-1] == '\\' {
@@ -750,7 +755,7 @@ func scanTagsValue(buf []byte, i int) (int, int, error) {
 		i++
 		if i >= len(buf) {
 			// cpu,tag=value
-			return -1, i, fmt.Errorf("missing fields")
+			return -1, i, errMissingFields
 		}
 
 		// An unescaped equals sign is an invalid tag value.
