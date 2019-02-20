@@ -75,7 +75,7 @@ export default class BucketOverlay extends PureComponent<Props, State> {
     )
 
     if (!rule) {
-      return 3600
+      return 0
     }
 
     return rule.everySeconds
@@ -104,8 +104,10 @@ export default class BucketOverlay extends PureComponent<Props, State> {
     this.setState({bucket})
   }
 
-  private handleChangeRuleType = ruleType => {
-    this.setState({ruleType})
+  private handleChangeRuleType = async (
+    ruleType: BucketRetentionRules.TypeEnum
+  ) => {
+    await this.setState({ruleType})
   }
 
   private handleSubmit = (e): void => {

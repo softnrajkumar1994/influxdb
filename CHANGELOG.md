@@ -4,6 +4,7 @@
 1. [11954](https://github.com/influxdata/influxdb/pull/11954): Add the ability to run a task manually from tasks page
 
 ### Bug Fixes
+1. [11997](https://github.com/influxdata/influxdb/pull/11997): Update the bucket retention policy to update the time in seconds
 
 ### UI Improvements
 
